@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hive Coverage Map</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐝</text></svg>">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: { colors: {
+        honey: { 50:'#fffbeb',100:'#fef3c7',200:'#fde68a',300:'#fcd34d',400:'#fbbf24',500:'#f59e0b',600:'#d97706',700:'#b45309',800:'#92400e',900:'#78350f' }
+      }}}
+    }
+  </script>
+  <style>
+    #map { height: 100%; width: 100%; }
+    .sidebar { transition: transform 0.3s ease; }
+    .sidebar.collapsed { transform: translateX(-100%); }
+    @keyframes pulse-ring { 0%{transform:scale(1);opacity:1} 100%{transform:scale(3);opacity:0} }
+    .search-pulse { position:absolute;width:16px;height:16px;border-radius:50%;background:rgba(139,92,246,0.4);animation:pulse-ring 1.5s ease-out infinite;top:50%;left:50%;transform:translate(-50%,-50%); }
+    .search-dot { position:relative;width:16px;height:16px;border-radius:50%;background:#8b5cf6;border:2px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3); }
+    .hive-icon { font-size:28px;filter:drop-shadow(0 2px 3px rgba(0,0,0,0.3));cursor:pointer;transition:transform 0.2s; }
+    .hive-icon:hover { transform:scale(1.3); }
+    .add-mode .leaflet-container { cursor: crosshair !important; }
+    .leaflet-popup-content-wrapper { border-radius: 12px; }
+    .opacity-slider { -webkit-appearance:none;appearance:none;height:6px;border-radius:3px;background:#e5e7eb;outline:none; }
+    .opacity-slider::-webkit-slider-thumb { -webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:#f59e0b;cursor:pointer;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.2); }
+    .modal-overlay { background:rgba(0,0,0,0.4);backdrop-filter:blur(2px); }
+    .gw-line { stroke-dasharray: 8 6; animation: dash 30s linear infinite; }
+    @keyframes dash { to { stroke-dashoffset: -1000; } }
+  </style>
+</head>
+<body class="flex h-screen overflow-hidden bg-gray-100">
+
+  <!-- Mobile Toggle -->
+  <button id="sidebar-toggle" class="fixed top-3 left-3 z-[1100] bg-white rounded-lg shadow-lg p-2 md:hidden" onclick="toggleSidebar()">
+    <svg id="toggle-icon-open" class="w-6 h-6 text-honey-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+    <svg id="toggle-icon-close" class="w-6 h-6 text-honey-700 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+  </button>
+
+  <!-- Sidebar -->
+  <aside id="sidebar" class="sidebar w-80 h-full bg-white shadow-xl flex flex-col z-[1000] flex-shrink-0 absolute md:relative">
+    <div class="bg-gradient-to-r from-honey-500 to-honey-600 p-4 flex items-center gap-3">
+      <span class="text-3xl">🐝</span>
+      <div>
+        <h1 class="text-white font-bold text-lg leading-tight">Hive Coverage Map</h1>
+        <p class="text-honey-100 text-xs">TTN LoRaWAN Coverage Checker</p>
+      </div>
+      <button class="ml-auto text-white/70 hover:text-white hidden md:block" onclick="toggleSidebar()">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7"/></svg>
+      </button>
+    </div>
+
+    <div class="flex-1 overflow-y-auto">
+      <!-- Coordinate Search -->
+      <div class="p-4 border-b border-gray-100">
+        <p class="font-semibold text-gray-800 text-sm mb-3 flex items-center gap-2">
+          <svg class="w-4 h-4 text-honey-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+          Check Coverage
+        </p>
+        <div class="mb-2">
+          <input id="coords-input" type="text" placeholder="52.602506, 4.671768" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-honey-400 focus:border-transparent outline-none" onkeydown="if(event.key==='Enter')handleSearch()">
+          <p class="text-[10px] text-gray-400 mt-1">Paste coordinates from Google Maps</p>
+        </div>
+        <div class="flex gap-2">
+          <button onclick="handleSearch()" class="flex-1 bg-honey-500 hover:bg-honey-600 text-white text-sm font-medium py-2 px-3 rounded-lg transition-colors">Check</button>
+          <button onclick="useMyLocation()" class="flex items-center gap-1 border border-gray-200 hover:bg-gray-50 text-gray-700 text-sm py-2 px-3 rounded-lg transition-colors" title="Use my location">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            My Location
+          </button>
+        </div>
+        <div id="coverage-result" class="mt-3 hidden"></div>
+        <!-- Nearest Gateways (shown after search) -->
+        <div id="nearest-gateways" class="mt-3 hidden"></div>
+      </div>
+
+      <!-- Beehive Locations -->
+      <div class="p-4 border-b border-gray-100">
+        <div class="flex items-center justify-between mb-3">
+          <p class="font-semibold text-gray-800 text-sm flex items-center gap-2">
+            🍯 My Hives <span id="hive-count" class="bg-honey-100 text-honey-700 text-xs font-medium px-2 py-0.5 rounded-full">0</span>
+          </p>
+          <div class="flex items-center gap-1">
+            <button onclick="shareHives()" class="text-blue-500 hover:text-blue-600 hover:bg-blue-50 p-1.5 rounded-lg transition-colors" title="Share hive locations">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/></svg>
+            </button>
+            <button id="add-hive-btn" onclick="enterAddHiveMode()" class="text-honey-600 hover:text-honey-700 hover:bg-honey-50 p-1.5 rounded-lg transition-colors" title="Add hive location">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            </button>
+          </div>
+        </div>
+        <div id="hive-list" class="space-y-2">
+          <p id="no-hives" class="text-gray-400 text-sm text-center py-4">No hives added yet.<br>Click + to add one.</p>
+        </div>
+      </div>
+
+      <!-- Gateway Stats -->
+      <div class="p-4 border-b border-gray-100">
+        <p class="font-semibold text-gray-800 text-sm mb-2 flex items-center gap-2">
+          📡 Gateways <span id="gw-count" class="bg-blue-100 text-blue-700 text-xs font-medium px-2 py-0.5 rounded-full">...</span>
+        </p>
+        <div class="flex items-center gap-3">
+          <span class="text-xs text-gray-500">Show range:</span>
+          <select id="gw-range" onchange="loadGateways()" class="border border-gray-200 rounded-lg px-2 py-1 text-xs focus:ring-2 focus:ring-honey-400 outline-none">
+            <option value="10000">10 km</option>
+            <option value="25000">25 km</option>
+            <option value="50000" selected>50 km</option>
+            <option value="100000">100 km</option>
+          </select>
+        </div>
+        <div class="flex items-center gap-3 mt-2">
+          <div class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-green-400"></span><span class="text-xs text-gray-500">Online</span></div>
+          <div class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-gray-300"></span><span class="text-xs text-gray-500">Offline</span></div>
+          <div class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-blue-400"></span><span class="text-xs text-gray-500">Outdoor</span></div>
+        </div>
+      </div>
+
+      <!-- Coverage Opacity -->
+      <div class="p-4">
+        <p class="font-semibold text-gray-800 text-sm mb-2">Gateway Opacity</p>
+        <div class="flex items-center gap-3">
+          <span class="text-xs text-gray-500">0%</span>
+          <input id="opacity-slider" type="range" min="0" max="100" value="70" class="opacity-slider flex-1" oninput="setGatewayOpacity(this.value)">
+          <span class="text-xs text-gray-500">100%</span>
+        </div>
+        <p class="text-xs text-gray-400 mt-1 text-center" id="opacity-value">70%</p>
+      </div>
+    </div>
+
+    <div class="p-3 border-t border-gray-100 bg-gray-50 text-center">
+      <p class="text-xs text-gray-400">Gateway data by <a href="https://packetbroker.net" target="_blank" class="text-honey-600 hover:underline">Packet Broker</a></p>
+    </div>
+  </aside>
+
+  <!-- Add Hive Mode Banner -->
+  <div id="add-hive-banner" class="hidden fixed top-0 left-0 right-0 z-[1050] bg-honey-500 text-white text-center py-2 text-sm font-medium shadow-lg">
+    Click on the map to place your hive &nbsp;|&nbsp;
+    <button onclick="exitAddHiveMode()" class="underline hover:no-underline">Cancel</button>
+  </div>
+
+  <!-- Map -->
+  <div id="map" class="flex-1"></div>
+
+  <!-- Add Hive Modal -->
+  <div id="add-hive-modal" class="hidden fixed inset-0 z-[1200] flex items-center justify-center modal-overlay">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6">
+      <h2 class="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">🐝 Add Hive Location</h2>
+      <div class="space-y-3">
+        <div>
+          <label class="text-sm font-medium text-gray-700 block mb-1">Name</label>
+          <input id="hive-name" type="text" placeholder="e.g. Apiary North" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-honey-400 focus:border-transparent outline-none">
+        </div>
+        <div>
+          <label class="text-sm font-medium text-gray-700 block mb-1">Coordinates</label>
+          <input id="hive-coords" type="text" placeholder="52.602506, 4.671768" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-honey-400 focus:border-transparent outline-none" oninput="onHiveCoordsInput()">
+          <p class="text-[10px] text-gray-400 mt-1">Paste from Google Maps or click on the map</p>
+        </div>
+        <div>
+          <label class="text-sm font-medium text-gray-700 block mb-1">Notes <span class="text-gray-400 font-normal">(optional)</span></label>
+          <textarea id="hive-notes" rows="2" placeholder="e.g. 12 frames, near the oak tree" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-honey-400 focus:border-transparent outline-none resize-none"></textarea>
+        </div>
+        <!-- Nearest gateways preview in modal -->
+        <div id="modal-gateways" class="hidden">
+          <label class="text-sm font-medium text-gray-700 block mb-1">Nearest Gateways</label>
+          <div id="modal-gw-list" class="space-y-1 max-h-40 overflow-y-auto"></div>
+        </div>
+      </div>
+      <div class="flex gap-2 mt-5">
+        <button onclick="closeAddHiveModal()" class="flex-1 border border-gray-200 hover:bg-gray-50 text-gray-700 text-sm font-medium py-2 rounded-lg transition-colors">Cancel</button>
+        <button onclick="saveHive()" class="flex-1 bg-honey-500 hover:bg-honey-600 text-white text-sm font-medium py-2 rounded-lg transition-colors">Save Hive</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Hive Modal -->
+  <div id="edit-hive-modal" class="hidden fixed inset-0 z-[1200] flex items-center justify-center modal-overlay">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6">
+      <h2 class="text-lg font-bold text-gray-800 mb-4">Edit Hive</h2>
+      <input id="edit-hive-id" type="hidden">
+      <div class="space-y-3">
+        <div>
+          <label class="text-sm font-medium text-gray-700 block mb-1">Name</label>
+          <input id="edit-hive-name" type="text" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-honey-400 focus:border-transparent outline-none">
+        </div>
+        <div>
+          <label class="text-sm font-medium text-gray-700 block mb-1">Notes</label>
+          <textarea id="edit-hive-notes" rows="2" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-honey-400 focus:border-transparent outline-none resize-none"></textarea>
+        </div>
+      </div>
+      <div class="flex gap-2 mt-5">
+        <button onclick="closeEditHiveModal()" class="flex-1 border border-gray-200 hover:bg-gray-50 text-gray-700 text-sm font-medium py-2 rounded-lg transition-colors">Cancel</button>
+        <button onclick="confirmDeleteHive()" class="border border-red-200 hover:bg-red-50 text-red-600 text-sm font-medium py-2 px-4 rounded-lg transition-colors">Delete</button>
+        <button onclick="updateHive()" class="flex-1 bg-honey-500 hover:bg-honey-600 text-white text-sm font-medium py-2 rounded-lg transition-colors">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ==================== State ====================
+    const STORAGE_KEY = 'beehive_locations';
+    let map, searchMarker, addHiveMode = false;
+    let hiveMarkers = {};
+    let allGateways = [];
+    let gatewayLayer = null;
+    let connectionLines = [];
+    let pendingHiveLatLng = null;
+
+    // ==================== Map Init ====================
+    function initMap() {
+      map = L.map('map', { zoomControl: false, attributionControl: true }).setView([52.0, 5.3], 8);
+      L.control.zoom({ position: 'topright' }).addTo(map);
+
+      const carto = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
+        subdomains: 'abcd', maxZoom: 20
+      });
+      const satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        attribution: '&copy; Esri', maxZoom: 19
+      });
+      const light = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; OSM &copy; CARTO', subdomains: 'abcd', maxZoom: 20
+      });
+      carto.addTo(map);
+
+      L.control.layers(
+        { 'Street Map': carto, 'Satellite': satellite, 'Light': light },
+        {},
+        { position: 'topright' }
+      ).addTo(map);
+
+      map.on('click', onMapClick);
+      map.on('moveend', loadGateways);
+
+      renderAllHives();
+      loadGateways();
+    }
+
+    // ==================== Sidebar ====================
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const openIcon = document.getElementById('toggle-icon-open');
+      const closeIcon = document.getElementById('toggle-icon-close');
+      sidebar.classList.toggle('collapsed');
+      openIcon.classList.toggle('hidden');
+      closeIcon.classList.toggle('hidden');
+    }
+
+    // ==================== Gateway Opacity ====================
+    function setGatewayOpacity(val) {
+      if (gatewayLayer) gatewayLayer.eachLayer(l => l.setOpacity(val / 100));
+      document.getElementById('opacity-value').textContent = val + '%';
+    }
+
+    // ==================== Gateway Loading ====================
+    async function loadGateways() {
+      const center = map.getCenter();
+      const range = document.getElementById('gw-range').value;
+
+      try {
+        const resp = await fetch(`https://mapper.packetbroker.net/api/v2/gateways?distanceWithin[latitude]=${center.lat}&distanceWithin[longitude]=${center.lng}&distanceWithin[distance]=${range}`);
+        if (!resp.ok) throw new Error('API error');
+        allGateways = await resp.json();
+      } catch (e) {
+        console.error('Failed to load gateways:', e);
+        return;
+      }
+
+      document.getElementById('gw-count').textContent = allGateways.length;
+
+      // Remove old layer
+      if (gatewayLayer) map.removeLayer(gatewayLayer);
+      gatewayLayer = L.layerGroup();
+
+      const opacity = document.getElementById('opacity-slider').value / 100;
+
+      allGateways.forEach(gw => {
+        if (!gw.location) return;
+        const { latitude, longitude } = gw.location;
+        const isOnline = gw.online === true;
+        const isOutdoor = gw.antennaPlacement === 'OUTDOOR';
+        const color = isOutdoor ? '#3b82f6' : isOnline ? '#22c55e' : '#9ca3af';
+        const radius = isOutdoor ? 5 : 4;
+
+        const marker = L.circleMarker([latitude, longitude], {
+          radius, fillColor: color, color: '#fff', weight: 1.5,
+          fillOpacity: opacity, opacity: opacity,
+        });
+
+        const lastSeen = gw.updatedAt ? new Date(gw.updatedAt).toLocaleString() : 'Unknown';
+        marker.bindPopup(`
+          <div style="min-width:180px">
+            <strong style="font-size:13px">📡 ${escapeHtml(gw.id || 'Unknown')}</strong>
+            <div style="font-size:11px;color:#666;margin-top:4px">
+              <p>${isOnline ? '🟢 Online' : '🔴 Offline'} · ${gw.antennaPlacement || 'Unknown'}</p>
+              <p>Antennas: ${gw.antennaCount || '?'}</p>
+              <p>Last seen: ${lastSeen}</p>
+              <p style="color:#999;margin-top:2px">${latitude.toFixed(5)}, ${longitude.toFixed(5)}</p>
+            </div>
+          </div>
+        `);
+
+        gatewayLayer.addLayer(marker);
+      });
+
+      gatewayLayer.addTo(map);
+    }
+
+    // ==================== Distance Calculation ====================
+    function haversineDistance(lat1, lng1, lat2, lng2) {
+      const R = 6371000; // meters
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLng = (lng2 - lng1) * Math.PI / 180;
+      const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLng/2)**2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    function formatDistance(meters) {
+      if (meters < 1000) return Math.round(meters) + ' m';
+      return (meters / 1000).toFixed(1) + ' km';
+    }
+
+    function findNearestGateways(lat, lng, count = 5) {
+      return allGateways
+        .filter(gw => gw.location && gw.online === true)
+        .map(gw => ({
+          ...gw,
+          distance: haversineDistance(lat, lng, gw.location.latitude, gw.location.longitude)
+        }))
+        .sort((a, b) => a.distance - b.distance)
+        .slice(0, count);
+    }
+
+    function drawConnectionLines(lat, lng, nearestGws) {
+      // Clear existing lines
+      connectionLines.forEach(l => map.removeLayer(l));
+      connectionLines = [];
+
+      nearestGws.forEach((gw, i) => {
+        const color = gw.online ? '#22c55e' : '#9ca3af';
+        const weight = i === 0 ? 3 : 2;
+        const opacity = 1 - (i * 0.15);
+
+        const line = L.polyline(
+          [[lat, lng], [gw.location.latitude, gw.location.longitude]],
+          { color, weight, opacity, dashArray: '8 6', className: 'gw-line' }
+        ).addTo(map);
+
+        // Distance label at midpoint
+        const midLat = (lat + gw.location.latitude) / 2;
+        const midLng = (lng + gw.location.longitude) / 2;
+        const label = L.marker([midLat, midLng], {
+          icon: L.divIcon({
+            className: '',
+            html: `<div style="background:white;padding:1px 6px;border-radius:10px;font-size:10px;font-weight:600;color:#374151;box-shadow:0 1px 3px rgba(0,0,0,0.2);white-space:nowrap">${formatDistance(gw.distance)}</div>`,
+            iconAnchor: [25, 10],
+          }),
+          interactive: false,
+        }).addTo(map);
+
+        connectionLines.push(line, label);
+      });
+    }
+
+    function renderNearestGateways(containerId, nearestGws) {
+      const container = document.getElementById(containerId);
+      container.classList.remove('hidden');
+
+      const listId = containerId === 'modal-gateways' ? 'modal-gw-list' : null;
+      const targetEl = listId ? document.getElementById(listId) : container;
+
+      if (listId) container.classList.remove('hidden');
+
+      const html = nearestGws.map((gw, i) => {
+        const statusDot = gw.online ? 'bg-green-400' : 'bg-gray-300';
+        const rank = i + 1;
+        const distStr = formatDistance(gw.distance);
+        const name = gw.id || 'Unknown gateway';
+        return `
+          <div class="flex items-center gap-2 p-2 rounded-lg ${i === 0 ? 'bg-green-50 border border-green-200' : 'bg-gray-50'}">
+            <span class="text-xs font-bold text-gray-400 w-4">#${rank}</span>
+            <span class="w-2 h-2 rounded-full ${statusDot} flex-shrink-0"></span>
+            <div class="flex-1 min-w-0">
+              <p class="text-xs font-medium text-gray-700 truncate">${escapeHtml(name)}</p>
+              <p class="text-[10px] text-gray-400">${gw.antennaPlacement || ''} · ${gw.antennaCount || '?'} ant.</p>
+            </div>
+            <span class="text-xs font-semibold ${gw.distance < 5000 ? 'text-green-600' : gw.distance < 15000 ? 'text-honey-600' : 'text-red-500'}">${distStr}</span>
+          </div>
+        `;
+      }).join('');
+
+      if (listId) {
+        targetEl.innerHTML = html;
+      } else {
+        targetEl.innerHTML = `
+          <p class="text-xs font-semibold text-gray-700 mb-2">📡 Nearest 5 Gateways</p>
+          <div class="space-y-1">${html}</div>
+        `;
+      }
+    }
+
+    // ==================== Coordinate Search ====================
+    function parseCoordinates(input) {
+      const cleaned = input.trim().replace(/\s+/g, ' ');
+      // Try "lat, lng" or "lat lng" format (Google Maps style)
+      const match = cleaned.match(/^(-?\d+\.?\d*)[,\s]+(-?\d+\.?\d*)$/);
+      if (match) return { lat: parseFloat(match[1]), lng: parseFloat(match[2]) };
+      return null;
+    }
+
+    function handleSearch() {
+      const input = document.getElementById('coords-input').value;
+      const parsed = parseCoordinates(input);
+      if (!parsed || isNaN(parsed.lat) || isNaN(parsed.lng) || parsed.lat < -90 || parsed.lat > 90 || parsed.lng < -180 || parsed.lng > 180) {
+        showCoverageResult('error', 'Enter coordinates like: 52.602506, 4.671768');
+        return;
+      }
+      searchLocation(parsed.lat, parsed.lng);
+    }
+
+    function useMyLocation() {
+      if (!('geolocation' in navigator)) {
+        showCoverageResult('error', 'Geolocation is not supported by your browser');
+        return;
+      }
+      showCoverageResult('loading', 'Getting your location...');
+      navigator.geolocation.getCurrentPosition(
+        pos => {
+          document.getElementById('coords-input').value = `${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)}`;
+          searchLocation(pos.coords.latitude, pos.coords.longitude);
+        },
+        () => showCoverageResult('error', 'Location access denied. Enter coordinates manually.')
+      );
+    }
+
+    async function searchLocation(lat, lng) {
+      if (searchMarker) map.removeLayer(searchMarker);
+      map.flyTo([lat, lng], 13, { duration: 1.5 });
+
+      searchMarker = L.marker([lat, lng], {
+        icon: L.divIcon({
+          className: '',
+          html: '<div class="search-dot"><div class="search-pulse"></div></div>',
+          iconSize: [16, 16], iconAnchor: [8, 8]
+        }),
+        zIndexOffset: 1000
+      }).addTo(map);
+
+      showCoverageResult('loading', 'Checking nearby gateways...');
+
+      // Fetch gateways centered on the search location (not map center)
+      try {
+        const resp = await fetch(`https://mapper.packetbroker.net/api/v2/gateways?distanceWithin[latitude]=${lat}&distanceWithin[longitude]=${lng}&distanceWithin[distance]=50000`);
+        if (resp.ok) {
+          allGateways = await resp.json();
+          document.getElementById('gw-count').textContent = allGateways.length;
+        }
+      } catch (e) { console.error('Failed to fetch gateways:', e); }
+
+      const nearest = findNearestGateways(lat, lng, 5);
+      if (nearest.length === 0) {
+        showCoverageResult('none', 'No online gateways found within 50 km.');
+        document.getElementById('nearest-gateways').classList.add('hidden');
+      } else {
+        const closest = nearest[0];
+        if (closest.distance < 5000) {
+          showCoverageResult('covered', `Good coverage! Nearest gateway <strong>${formatDistance(closest.distance)}</strong> away (${escapeHtml(closest.id || 'Unknown')})`);
+        } else if (closest.distance < 15000) {
+          showCoverageResult('visual', `Marginal coverage. Nearest gateway is <strong>${formatDistance(closest.distance)}</strong> away. LoRaWAN typically reaches 5-10 km.`);
+        } else {
+          showCoverageResult('none', `No nearby gateways. Closest is <strong>${formatDistance(closest.distance)}</strong> away. You may need your own gateway.`);
+        }
+        drawConnectionLines(lat, lng, nearest);
+        renderNearestGateways('nearest-gateways', nearest);
+      }
+
+      // Also refresh the map markers
+      loadGateways();
+    }
+
+    function showCoverageResult(type, message) {
+      const el = document.getElementById('coverage-result');
+      el.classList.remove('hidden');
+      const styles = {
+        loading: 'bg-gray-50 text-gray-600 border-gray-200',
+        covered: 'bg-green-50 text-green-800 border-green-200',
+        none: 'bg-red-50 text-red-700 border-red-200',
+        visual: 'bg-amber-50 text-amber-700 border-amber-200',
+        error: 'bg-red-50 text-red-700 border-red-200'
+      };
+      const icons = { loading:'⏳', covered:'✅', none:'❌', visual:'⚠️', error:'⚠️' };
+      el.className = `mt-3 p-3 rounded-lg border text-sm ${styles[type] || styles.error}`;
+      el.innerHTML = `${icons[type] || ''} ${message}`;
+    }
+
+    // ==================== Map Click ====================
+    function onMapClick(e) {
+      if (addHiveMode) {
+        // Update coords in the already-open modal
+        document.getElementById('hive-coords').value = `${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`;
+        refreshModalGateways(e.latlng.lat, e.latlng.lng);
+        exitAddHiveMode();
+        return;
+      }
+    }
+
+    // ==================== Beehive Management ====================
+    function loadHives() {
+      try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
+      catch { return []; }
+    }
+
+    function saveHives(hives) { localStorage.setItem(STORAGE_KEY, JSON.stringify(hives)); }
+
+    function enterAddHiveMode() {
+      // Open modal directly — user can paste coords or click map
+      openAddHiveModal(null, null);
+      addHiveMode = true;
+      document.body.classList.add('add-mode');
+      document.getElementById('add-hive-banner').classList.remove('hidden');
+    }
+
+    function exitAddHiveMode() {
+      addHiveMode = false;
+      document.body.classList.remove('add-mode');
+      document.getElementById('add-hive-banner').classList.add('hidden');
+    }
+
+    function openAddHiveModal(lat, lng) {
+      document.getElementById('hive-name').value = '';
+      document.getElementById('hive-notes').value = '';
+      document.getElementById('hive-coords').value = lat != null ? `${lat.toFixed(6)}, ${lng.toFixed(6)}` : '';
+      document.getElementById('add-hive-modal').classList.remove('hidden');
+      document.getElementById('modal-gateways').classList.add('hidden');
+
+      if (lat != null) {
+        refreshModalGateways(lat, lng);
+      }
+
+      setTimeout(() => document.getElementById(lat != null ? 'hive-name' : 'hive-coords').focus(), 100);
+    }
+
+    async function refreshModalGateways(lat, lng) {
+      // Fetch gateways near this location
+      try {
+        const resp = await fetch(`https://mapper.packetbroker.net/api/v2/gateways?distanceWithin[latitude]=${lat}&distanceWithin[longitude]=${lng}&distanceWithin[distance]=50000`);
+        if (resp.ok) {
+          allGateways = await resp.json();
+          document.getElementById('gw-count').textContent = allGateways.length;
+        }
+      } catch (e) { /* ignore */ }
+
+      const nearest = findNearestGateways(lat, lng, 5);
+      if (nearest.length > 0) {
+        renderNearestGateways('modal-gateways', nearest);
+        drawConnectionLines(lat, lng, nearest);
+      } else {
+        document.getElementById('modal-gateways').classList.add('hidden');
+      }
+    }
+
+    function onHiveCoordsInput() {
+      const parsed = parseCoordinates(document.getElementById('hive-coords').value);
+      if (parsed && !isNaN(parsed.lat) && !isNaN(parsed.lng) && parsed.lat >= -90 && parsed.lat <= 90 && parsed.lng >= -180 && parsed.lng <= 180) {
+        map.flyTo([parsed.lat, parsed.lng], 14, { duration: 1 });
+        refreshModalGateways(parsed.lat, parsed.lng);
+      }
+    }
+
+    function closeAddHiveModal() {
+      document.getElementById('add-hive-modal').classList.add('hidden');
+      connectionLines.forEach(l => map.removeLayer(l));
+      connectionLines = [];
+      pendingHiveLatLng = null;
+      exitAddHiveMode();
+    }
+
+    function saveHive() {
+      const name = document.getElementById('hive-name').value.trim() || 'Unnamed Hive';
+      const coordsVal = document.getElementById('hive-coords').value;
+      const parsed = parseCoordinates(coordsVal);
+      if (!parsed || isNaN(parsed.lat) || isNaN(parsed.lng) || parsed.lat < -90 || parsed.lat > 90 || parsed.lng < -180 || parsed.lng > 180) {
+        document.getElementById('hive-coords').style.borderColor = '#ef4444';
+        return;
+      }
+      document.getElementById('hive-coords').style.borderColor = '';
+      const lat = parsed.lat;
+      const lng = parsed.lng;
+      const notes = document.getElementById('hive-notes').value.trim();
+
+      const nearest = findNearestGateways(lat, lng, 5);
+      const closestDist = nearest.length > 0 ? nearest[0].distance : null;
+      const coverageStatus = closestDist !== null ? (closestDist < 10000 ? 'covered' : 'none') : null;
+
+      const hive = {
+        id: 'hive_' + Date.now(), name, lat, lng, notes,
+        createdAt: new Date().toISOString(),
+        coverageStatus,
+        nearestGatewayDist: closestDist,
+      };
+
+      const hives = loadHives();
+      hives.push(hive);
+      saveHives(hives);
+
+      addHiveMarker(hive);
+      renderHiveList();
+      closeAddHiveModal();
+    }
+
+    function addHiveMarker(hive) {
+      const marker = L.marker([hive.lat, hive.lng], {
+        icon: L.divIcon({
+          className: '',
+          html: '<div class="hive-icon">🐝</div>',
+          iconSize: [28, 28], iconAnchor: [14, 14]
+        }),
+        zIndexOffset: 500
+      }).addTo(map);
+
+      marker.on('click', () => {
+        const nearest = findNearestGateways(hive.lat, hive.lng, 5);
+        drawConnectionLines(hive.lat, hive.lng, nearest);
+      });
+
+      const distStr = hive.nearestGatewayDist != null ? formatDistance(hive.nearestGatewayDist) : '?';
+      marker.bindPopup(`
+        <div style="min-width:160px">
+          <strong>${escapeHtml(hive.name)}</strong>
+          ${hive.notes ? `<p style="font-size:12px;color:#666;margin:4px 0">${escapeHtml(hive.notes)}</p>` : ''}
+          <p style="font-size:11px;color:#999;margin:4px 0">${hive.lat.toFixed(5)}, ${hive.lng.toFixed(5)}</p>
+          <p style="font-size:12px;margin:4px 0">📡 Nearest gateway: <strong>${distStr}</strong></p>
+          <button onclick="openEditHiveModal('${hive.id}')" style="font-size:12px;color:#d97706;cursor:pointer;border:none;background:none;padding:0;text-decoration:underline">Edit</button>
+        </div>
+      `);
+
+      hiveMarkers[hive.id] = marker;
+    }
+
+    function removeHiveMarker(id) {
+      if (hiveMarkers[id]) { map.removeLayer(hiveMarkers[id]); delete hiveMarkers[id]; }
+    }
+
+    function renderAllHives() {
+      Object.keys(hiveMarkers).forEach(id => removeHiveMarker(id));
+      loadHives().forEach(h => addHiveMarker(h));
+      renderHiveList();
+    }
+
+    function renderHiveList() {
+      const hives = loadHives();
+      const list = document.getElementById('hive-list');
+      document.getElementById('hive-count').textContent = hives.length;
+
+      if (hives.length === 0) {
+        list.innerHTML = '<p class="text-gray-400 text-sm text-center py-4">No hives added yet.<br>Click + to add one.</p>';
+        return;
+      }
+
+      list.innerHTML = hives.map(h => {
+        const statusDot = h.coverageStatus === 'covered' ? 'bg-green-400' : h.coverageStatus === 'none' ? 'bg-red-400' : 'bg-gray-300';
+        const distStr = h.nearestGatewayDist != null ? formatDistance(h.nearestGatewayDist) : '';
+        return `
+          <div class="flex items-center gap-3 p-2.5 rounded-lg hover:bg-honey-50 cursor-pointer transition-colors group" onclick="flyToHive('${h.id}')">
+            <span class="text-lg">🐝</span>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium text-gray-800 truncate">${escapeHtml(h.name)}</p>
+              <p class="text-xs text-gray-400 truncate">${distStr ? '📡 ' + distStr : h.lat.toFixed(4) + ', ' + h.lng.toFixed(4)}</p>
+            </div>
+            <span class="w-2.5 h-2.5 rounded-full ${statusDot} flex-shrink-0"></span>
+            <button onclick="event.stopPropagation(); openEditHiveModal('${h.id}')" class="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-honey-600 transition-all p-1">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+            </button>
+          </div>`;
+      }).join('');
+    }
+
+    function flyToHive(id) {
+      const hive = loadHives().find(h => h.id === id);
+      if (!hive) return;
+      map.flyTo([hive.lat, hive.lng], 14, { duration: 1 });
+      if (hiveMarkers[id]) hiveMarkers[id].openPopup();
+      const nearest = findNearestGateways(hive.lat, hive.lng, 5);
+      drawConnectionLines(hive.lat, hive.lng, nearest);
+    }
+
+    function openEditHiveModal(id) {
+      const hive = loadHives().find(h => h.id === id);
+      if (!hive) return;
+      document.getElementById('edit-hive-id').value = id;
+      document.getElementById('edit-hive-name').value = hive.name;
+      document.getElementById('edit-hive-notes').value = hive.notes || '';
+      document.getElementById('edit-hive-modal').classList.remove('hidden');
+    }
+
+    function closeEditHiveModal() { document.getElementById('edit-hive-modal').classList.add('hidden'); }
+
+    function updateHive() {
+      const id = document.getElementById('edit-hive-id').value;
+      const hives = loadHives();
+      const idx = hives.findIndex(h => h.id === id);
+      if (idx === -1) return;
+      hives[idx].name = document.getElementById('edit-hive-name').value.trim() || 'Unnamed Hive';
+      hives[idx].notes = document.getElementById('edit-hive-notes').value.trim();
+      saveHives(hives);
+      removeHiveMarker(id);
+      addHiveMarker(hives[idx]);
+      renderHiveList();
+      closeEditHiveModal();
+    }
+
+    function confirmDeleteHive() {
+      const id = document.getElementById('edit-hive-id').value;
+      if (!id) return;
+      saveHives(loadHives().filter(h => h.id !== id));
+      removeHiveMarker(id);
+      renderHiveList();
+      closeEditHiveModal();
+      // Clear any connection lines
+      connectionLines.forEach(l => map.removeLayer(l));
+      connectionLines = [];
+    }
+
+    // ==================== Utilities ====================
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    // ==================== URL Sharing ====================
+    function shareHives() {
+      const hives = loadHives();
+      if (hives.length === 0) {
+        alert('No hives to share. Add some first!');
+        return;
+      }
+      // Compact format: name|lat|lng|notes per hive, base64 encoded
+      const data = hives.map(h => `${h.name}|${h.lat}|${h.lng}|${h.notes || ''}`).join('\n');
+      const encoded = btoa(unescape(encodeURIComponent(data)));
+      const url = window.location.origin + window.location.pathname + '#hives=' + encoded;
+
+      navigator.clipboard.writeText(url).then(() => {
+        showShareToast('Link copied! Send it to your friend.');
+      }).catch(() => {
+        // Fallback: show URL in prompt
+        prompt('Copy this link to share your hives:', url);
+      });
+    }
+
+    function loadHivesFromURL() {
+      const hash = window.location.hash;
+      if (!hash.startsWith('#hives=')) return;
+      try {
+        const encoded = hash.slice(7);
+        const data = decodeURIComponent(escape(atob(encoded)));
+        const lines = data.split('\n').filter(l => l.trim());
+        const imported = lines.map(line => {
+          const [name, lat, lng, notes] = line.split('|');
+          return {
+            id: 'hive_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+            name: name || 'Imported Hive',
+            lat: parseFloat(lat),
+            lng: parseFloat(lng),
+            notes: notes || '',
+            createdAt: new Date().toISOString(),
+            coverageStatus: null,
+            nearestGatewayDist: null,
+          };
+        }).filter(h => !isNaN(h.lat) && !isNaN(h.lng));
+
+        if (imported.length === 0) return;
+
+        // Merge with existing hives (avoid duplicates by coords)
+        const existing = loadHives();
+        const newHives = imported.filter(imp =>
+          !existing.some(ex => Math.abs(ex.lat - imp.lat) < 0.0001 && Math.abs(ex.lng - imp.lng) < 0.0001)
+        );
+
+        if (newHives.length > 0) {
+          const merged = [...existing, ...newHives];
+          saveHives(merged);
+          renderAllHives();
+          showShareToast(`Imported ${newHives.length} hive${newHives.length > 1 ? 's' : ''} from shared link!`);
+
+          // Fly to first imported hive
+          map.flyTo([newHives[0].lat, newHives[0].lng], 12, { duration: 1.5 });
+        } else {
+          showShareToast('All shared hives already exist.');
+        }
+
+        // Clean up URL
+        history.replaceState(null, '', window.location.pathname);
+      } catch (e) {
+        console.error('Failed to parse shared hives:', e);
+      }
+    }
+
+    function showShareToast(message) {
+      const toast = document.createElement('div');
+      toast.className = 'fixed bottom-6 left-1/2 -translate-x-1/2 z-[2000] bg-gray-800 text-white text-sm px-4 py-2 rounded-lg shadow-lg transition-opacity';
+      toast.textContent = message;
+      document.body.appendChild(toast);
+      setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 3000);
+    }
+
+    // ==================== Init ====================
+    initMap();
+    // Load shared hives from URL after map init
+    setTimeout(loadHivesFromURL, 1000);
+  </script>
+</body>
+</html>
