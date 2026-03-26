@@ -785,8 +785,26 @@
           renderAllHives();
           showShareToast(`Imported ${newHives.length} hive${newHives.length > 1 ? 's' : ''} from shared link!`);
 
-          // Fly to first imported hive
-          map.flyTo([newHives[0].lat, newHives[0].lng], 12, { duration: 1.5 });
+          // Fly to first imported hive and calculate distances
+          const firstHive = newHives[0];
+          map.flyTo([firstHive.lat, firstHive.lng], 12, { duration: 1.5 });
+
+          // Fetch gateways and update distances for imported hives
+          fetch(`https://mapper.packetbroker.net/api/v2/gateways?distanceWithin[latitude]=${firstHive.lat}&distanceWithin[longitude]=${firstHive.lng}&distanceWithin[distance]=50000`)
+            .then(r => r.ok ? r.json() : [])
+            .then(gws => {
+              allGateways = gws;
+              document.getElementById('gw-count').textContent = gws.length;
+              const updated = merged.map(h => {
+                if (h.nearestGatewayDist != null) return h;
+                const nearest = findNearestGateways(h.lat, h.lng, 1);
+                const dist = nearest.length > 0 ? nearest[0].distance : null;
+                return { ...h, nearestGatewayDist: dist, coverageStatus: dist !== null ? (dist < 10000 ? 'covered' : 'none') : null };
+              });
+              saveHives(updated);
+              renderAllHives();
+              loadGateways();
+            }).catch(() => {});
         } else {
           showShareToast('All shared hives already exist.');
         }
